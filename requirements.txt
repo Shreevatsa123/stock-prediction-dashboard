@@ -58,3 +58,6 @@ urllib3==2.5.0
 watchdog==6.0.0
 websockets==15.0.1
 yfinance==0.2.66
+transformers
+torch
+groq
