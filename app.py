@@ -22,7 +22,7 @@ st.set_page_config(
 
 # --- Caching Functions for Performance ---
 @st.cache_data
-def get_stock_data(ticker, period="10y"):
+def get_stock_data(ticker, period="20y"):
     """Downloads historical stock data from Yahoo Finance."""
     return yf.Ticker(ticker).history(period=period)
 
@@ -52,7 +52,7 @@ def get_news_sentiment(company_name):
 def train_prediction_model(ticker):
     """Creates features and trains a predictive model including news sentiment."""
     # Step 1: Get 10 years of stock data
-    data = get_stock_data(ticker, period="10y")
+    data = get_stock_data(ticker, period="20y")
 
     # --- NEW: Get and Process News Sentiment ---
     news_df = get_historical_news(ticker, data)
@@ -121,7 +121,7 @@ def get_historical_news(ticker, data):
     if not news_df.empty:
         news_df['datetime'] = pd.to_datetime(news_df['datetime'], unit='s')
         news_df.set_index('datetime', inplace=True)
-        news_df = news_df.tz_localize('UTC').tz_convert('America/New_York').tz_localize(None) # Convert to market time
+        news_df = news_df.tz_localize('UTC').tz_convert('America/New_York')
     return news_df
 
 def generate_ai_summary(ticker, company_name, model_accuracy, news_sentiment):
