@@ -1,0 +1,148 @@
+# Home.py - FINAL Corrected Version
+
+import streamlit as st
+import pandas as pd
+import numpy as np
+import yfinance as yf
+import finnhub
+import requests
+from bs4 import BeautifulSoup
+from transformers import pipeline
+from groq import Groq
+import plotly.graph_objects as go
+import xgboost as xgb
+from sklearn.model_selection import GridSearchCV, TimeSeriesSplit
+from sklearn.metrics import accuracy_score
+
+# --- Page Configuration ---
+st.set_page_config(page_title="AI Financial Analyst Dashboard", page_icon="🤖", layout="wide")
+
+# (All your caching functions remain the same)
+@st.cache_data
+def get_stock_data(ticker):
+    return yf.Ticker(ticker).history(period="730d", interval="1h")
+
+@st.cache_data
+def get_historical_news(ticker, data):
+    finnhub_client = finnhub.Client(api_key=st.secrets["FINNHUB_API_KEY"])
+    all_news = []
+    start_date, end_date = data.index.min().strftime('%Y-%m-%d'), data.index.max().strftime('%Y-%m-%d')
+    news = finnhub_client.company_news(ticker, _from=start_date, to=end_date)
+    all_news.extend(news)
+    news_df = pd.DataFrame(all_news)
+    if not news_df.empty:
+        news_df['datetime'] = pd.to_datetime(news_df['datetime'], unit='s')
+        news_df.set_index('datetime', inplace=True)
+        news_df = news_df.tz_localize('UTC').tz_convert('America/New_York')
+    return news_df
+
+@st.cache_data
+def get_news_sentiment(company_name):
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    url = f"https://www.google.com/search?q={company_name}+stock+news&tbm=nws"
+    response = requests.get(url, headers=headers)
+    soup = BeautifulSoup(response.text, 'html.parser')
+    headlines = [item.get_text() for item in soup.find_all('div', {'class': 'n0jPhd ynAwRc MBeuO nDgy9d'}, limit=5)]
+    if not headlines: return "Could not retrieve recent news headlines."
+    sentiment_analyzer = pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english")
+    results = sentiment_analyzer(headlines)
+    analysis = f"Recent News Sentiment for {company_name}:\n"
+    for i, headline in enumerate(headlines):
+        analysis += f"- Headline: {headline}\n  - Sentiment: {results[i]['label']} (Score: {results[i]['score']:.2f})\n"
+    return analysis
+
+@st.cache_data
+def engineer_features_and_split(data, news_df):
+    if not news_df.empty:
+        sentiment_analyzer = pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english")
+        sentiment = sentiment_analyzer(news_df['headline'].tolist())
+        news_df['sentiment_score'] = [s['score'] if s['label'] == 'POSITIVE' else -s['score'] for s in sentiment]
+        daily_sentiment = news_df.resample('D')['sentiment_score'].mean().reindex(data.index, method='ffill')
+        data = data.join(daily_sentiment)
+        data['sentiment_score'].fillna(0, inplace=True)
+    else:
+        data['sentiment_score'] = 0
+    data['SMA_20'] = data['Close'].rolling(window=20).mean()
+    data['Std_Dev_20'] = data['Close'].rolling(window=20).std()
+    data['Upper_Band'] = data['SMA_20'] + (data['Std_Dev_20'] * 2)
+    data['Lower_Band'] = data['SMA_20'] - (data['Std_Dev_20'] * 2)
+    high_low, high_close, low_close = data['High'] - data['Low'], np.abs(data['High'] - data['Close'].shift()), np.abs(data['Low'] - data['Close'].shift())
+    ranges = pd.concat([high_low, high_close, low_close], axis=1)
+    data['ATR'] = np.max(ranges, axis=1).rolling(14).mean()
+    data['RSI'] = 100 - (100 / (1 + ((data['Close'].diff().where(data['Close'].diff() > 0, 0)).rolling(14).mean() / (-data['Close'].diff().where(data['Close'].diff() < 0, 0)).rolling(14).mean())))
+    data['Target'] = (data['Close'].shift(-1) > data['Close']).astype(int)
+    data.dropna(inplace=True)
+    features = ['Close', 'Volume', 'sentiment_score', 'RSI', 'SMA_20', 'Upper_Band', 'Lower_Band', 'ATR']
+    X, y = data[features], data['Target']
+    tscv = TimeSeriesSplit(n_splits=5)
+    for train_index, test_index in tscv.split(X):
+        X_train, X_test, y_train, y_test = X.iloc[train_index], X.iloc[test_index], y.iloc[train_index], y.iloc[test_index]
+    return data, X, features, X_train, X_test, y_train, y_test, tscv
+
+@st.cache_data
+def find_best_model(X_train, y_train, _tscv):
+    param_grid = {'n_estimators': [100, 200], 'max_depth': [3, 5, 7], 'learning_rate': [0.01, 0.1]}
+    xgb_model = xgb.XGBClassifier(objective='binary:logistic', random_state=42, use_label_encoder=False, eval_metric='logloss')
+    grid_search = GridSearchCV(estimator=xgb_model, param_grid=param_grid, scoring='accuracy', cv=_tscv, n_jobs=-1)
+    grid_search.fit(X_train, y_train)
+    return grid_search.best_estimator_, grid_search.best_params_
+
+def generate_ai_summary(ticker, company_name, model_accuracy, news_sentiment):
+    client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+    system_prompt = "You are a senior financial analyst AI..."
+    human_prompt = f"Report for {company_name} ({ticker})...\n--- ACCURACY ---\n{model_accuracy:.2%}\n--- SENTIMENT ---\n{news_sentiment}"
+    chat_completion = client.chat.completions.create(messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": human_prompt}], model="llama-3.3-70b-versatile")
+    return chat_completion.choices[0].message.content
+
+# --- Main Analysis Function ---
+def run_analysis(ticker):
+    """Orchestrates the analysis and logs details to session_state."""
+    logs = []
+    data = get_stock_data(ticker)
+    news_df = get_historical_news(ticker, data)
+    logs.append(f"## Step 1 & 2: Data Collection\n- Fetched **{len(data)}** hourly data points and **{len(news_df)}** news headlines.")
+    data, X, features, X_train, X_test, y_train, y_test, tscv = engineer_features_and_split(data, news_df)
+    logs.append(f"\n## Step 3 & 4: Feature Engineering & Splitting\n- **Splitting Method:** `TimeSeriesSplit` to train on the past and test on the future.\n- Final training data shape: `{X_train.shape}`. Testing data shape: `{X_test.shape}`.")
+    best_model, best_params = find_best_model(X_train, y_train, tscv)
+    logs.append(f"\n## Step 5: Model Selection & Tuning\n- **Algorithm:** `XGBoost` for its high performance.\n- Best parameters found by `GridSearchCV`: `{best_params}`")
+    y_pred = best_model.predict(X_test)
+    accuracy = accuracy_score(y_test, y_pred)
+    logs.append(f"\n## Step 6: Final Evaluation\n- Final Model Accuracy on test data: **{accuracy:.2%}**")
+    st.session_state.run_details = {'logs': logs, 'model': best_model, 'accuracy': accuracy, 'data': data, 'features': features, 'X_test': X_test, 'y_pred': y_pred, 'correlation_matrix': X.corr(), 'best_params': best_params, 'initial_data_head': get_stock_data(ticker).head(), 'featured_data_head': data.head()}
+
+# --- Streamlit App UI ---
+st.title("AI Financial Analyst Dashboard")
+st.sidebar.header("User Input")
+ticker_map = {"NVIDIA": "NVDA", "Apple": "AAPL", "Google": "GOOGL", "Microsoft": "MSFT", "Amazon": "AMZN", "Tesla": "TSLA", "Meta Platforms": "META", "JPMorgan Chase": "JPM", "Visa": "V", "Mastercard": "MA", "Johnson & Johnson": "JNJ", "Walmart": "WMT", "Procter & Gamble": "PG", "Home Depot": "HD", "Salesforce": "CRM", "Adobe": "ADBE", "Intel": "INTC", "Cisco Systems": "CSCO", "Oracle": "ORCL", "Accenture": "ACN", "Netflix": "NFLX", "Goldman Sachs": "GS", "Morgan Stanley": "MS", "American Express": "AXP"}
+company_name = st.sidebar.selectbox("Select a Company", list(ticker_map.keys()))
+ticker = ticker_map[company_name]
+
+if 'current_ticker' not in st.session_state or st.session_state.current_ticker != ticker:
+    with st.spinner(f"Running full analysis for {company_name}..."):
+        run_analysis(ticker)
+        st.session_state.current_ticker = ticker
+
+details = st.session_state.run_details
+if details:
+    st.header(f"Predictive Analysis for {company_name}")
+    st.metric(label="Prediction Model Accuracy", value=f"{details['accuracy']:.2%}")
+
+    # --- UPDATED: Plotly chart with full test data ---
+    predictions_df = details['X_test'].copy()
+    predictions_df['Actual_Close'] = details['data']['Close'].loc[details['X_test'].index]
+    predictions_df['Prediction'] = details['y_pred']
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=predictions_df.index, y=predictions_df['Actual_Close'], mode='lines', name='Actual Price'))
+    up = predictions_df[predictions_df['Prediction'] == 1]
+    down = predictions_df[predictions_df['Prediction'] == 0]
+    fig.add_trace(go.Scatter(x=up.index, y=up['Actual_Close'], mode='markers', name='Predicted Up', marker=dict(color='green', symbol='triangle-up', size=8)))
+    fig.add_trace(go.Scatter(x=down.index, y=down['Actual_Close'], mode='markers', name='Predicted Down', marker=dict(color='red', symbol='triangle-down', size=8)))
+    fig.update_layout(title=f'{company_name} - Actual Price vs. Predictions (Full Test Period)', height=600)
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.header("AI-Generated Summary Report")
+    if st.button("Generate AI Summary"):
+        with st.spinner("Getting recent news and generating report..."):
+            news_sentiment = get_news_sentiment(company_name)
+            ai_summary = generate_ai_summary(ticker, company_name, details['accuracy'], news_sentiment)
+            st.markdown(ai_summary)
