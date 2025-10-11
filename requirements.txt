@@ -61,3 +61,4 @@ yfinance==0.2.66
 transformers
 torch
 groq
+finnhub-python

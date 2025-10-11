@@ -11,6 +11,7 @@ import seaborn as sns
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score
+import finnhub
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -45,12 +46,35 @@ def get_news_sentiment(company_name):
         analysis += f"- Headline: {headline}\n  - Sentiment: {results[i]['label']} (Score: {results[i]['score']:.2f})\n"
     return analysis
 
+# Make sure to add this import at the top of your file
+
 @st.cache_data
 def train_prediction_model(ticker):
-    """Creates features and trains a predictive model."""
-    data = get_stock_data(ticker)
+    """Creates features and trains a predictive model including news sentiment."""
+    # Step 1: Get 10 years of stock data
+    data = get_stock_data(ticker, period="10y")
+
+    # --- NEW: Get and Process News Sentiment ---
+    news_df = get_historical_news(ticker, data)
     
-    # Feature Engineering
+    if not news_df.empty:
+        # Perform sentiment analysis on headlines
+        sentiment_analyzer = pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english")
+        sentiment = sentiment_analyzer(news_df['headline'].tolist())
+        news_df['sentiment_score'] = [s['score'] if s['label'] == 'POSITIVE' else -s['score'] for s in sentiment]
+        
+        # Calculate the average sentiment per day
+        daily_sentiment = news_df.resample('D')['sentiment_score'].mean()
+        
+        # Merge sentiment scores into the main data frame
+        data = data.join(daily_sentiment)
+        data['sentiment_score'].fillna(0, inplace=True) # Fill days with no news with a neutral score
+    else:
+        # If no news is found, create a neutral sentiment column
+        data['sentiment_score'] = 0
+    # --- END OF NEW SECTION ---
+
+    # Step 2: Feature Engineering (as before)
     data['SMA_50'] = data['Close'].rolling(window=50).mean()
     data['SMA_200'] = data['Close'].rolling(window=200).mean()
     delta = data['Close'].diff()
@@ -60,8 +84,9 @@ def train_prediction_model(ticker):
     data['Target'] = (data['Close'].shift(-1) > data['Close']).astype(int)
     data.dropna(inplace=True)
     
-    # Model Training
-    features = ['Close', 'Volume', 'SMA_50', 'SMA_200', 'RSI']
+    # Step 3: Model Training (with the new feature!)
+    # Add 'sentiment_score' to the list of features
+    features = ['Close', 'Volume', 'SMA_50', 'SMA_200', 'RSI', 'sentiment_score']
     X = data[features]
     y = data['Target']
     
@@ -75,6 +100,29 @@ def train_prediction_model(ticker):
     accuracy = accuracy_score(y_test, model.predict(X_test))
     
     return model, accuracy, data, features
+
+@st.cache_data
+def get_historical_news(ticker, data):
+    """Fetches historical news from Finnhub for the date range of the stock data."""
+    st.write("Fetching historical news... This may take a minute for the first run.")
+    finnhub_client = finnhub.Client(api_key=st.secrets["FINNHUB_API_KEY"])
+    all_news = []
+    
+    # Get date range from the main stock dataframe
+    start_date = data.index.min().strftime('%Y-%m-%d')
+    end_date = data.index.max().strftime('%Y-%m-%d')
+    
+    # Fetch news
+    news = finnhub_client.company_news(ticker, _from=start_date, to=end_date)
+    all_news.extend(news)
+    
+    # Convert to DataFrame
+    news_df = pd.DataFrame(all_news)
+    if not news_df.empty:
+        news_df['datetime'] = pd.to_datetime(news_df['datetime'], unit='s')
+        news_df.set_index('datetime', inplace=True)
+        news_df = news_df.tz_localize('UTC').tz_convert('America/New_York').tz_localize(None) # Convert to market time
+    return news_df
 
 def generate_ai_summary(ticker, company_name, model_accuracy, news_sentiment):
     """Uses an LLM to generate a final summary report."""
