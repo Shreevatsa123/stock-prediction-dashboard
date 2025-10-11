@@ -48,54 +48,72 @@ def get_news_sentiment(company_name):
 
 # Make sure to add this import at the top of your file
 
+# Make sure to add this import at the top of your file
+import xgboost as xgb
+
 @st.cache_data
 def train_prediction_model(ticker):
-    """Creates features and trains a predictive model including news sentiment."""
-    # Step 1: Get 10 years of stock data
-    data = get_stock_data(ticker, period="20y")
+    """Creates advanced features and trains an XGBoost model on a 7-year period."""
+    # --- UPGRADE 1: Focus on a more relevant 7-year period ---
+    data = get_stock_data(ticker, period="7y")
 
-    # --- NEW: Get and Process News Sentiment ---
+    # --- Get and Process News Sentiment (as before) ---
     news_df = get_historical_news(ticker, data)
-    
     if not news_df.empty:
-        # Perform sentiment analysis on headlines
         sentiment_analyzer = pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english")
         sentiment = sentiment_analyzer(news_df['headline'].tolist())
         news_df['sentiment_score'] = [s['score'] if s['label'] == 'POSITIVE' else -s['score'] for s in sentiment]
-        
-        # Calculate the average sentiment per day
         daily_sentiment = news_df.resample('D')['sentiment_score'].mean()
-        
-        # Merge sentiment scores into the main data frame
         data = data.join(daily_sentiment)
-        data['sentiment_score'].fillna(0, inplace=True) # Fill days with no news with a neutral score
+        data['sentiment_score'].fillna(0, inplace=True)
     else:
-        # If no news is found, create a neutral sentiment column
         data['sentiment_score'] = 0
-    # --- END OF NEW SECTION ---
 
-    # Step 2: Feature Engineering (as before)
-    data['SMA_50'] = data['Close'].rolling(window=50).mean()
-    data['SMA_200'] = data['Close'].rolling(window=200).mean()
-    delta = data['Close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-    data['RSI'] = 100 - (100 / (1 + (gain / loss)))
+    # --- UPGRADE 2: Add more advanced features ---
+    # Bollinger Bands
+    data['SMA_20'] = data['Close'].rolling(window=20).mean()
+    data['Std_Dev_20'] = data['Close'].rolling(window=20).std()
+    data['Upper_Band'] = data['SMA_20'] + (data['Std_Dev_20'] * 2)
+    data['Lower_Band'] = data['SMA_20'] - (data['Std_Dev_20'] * 2)
+    
+    # Average True Range (ATR)
+    high_low = data['High'] - data['Low']
+    high_close = np.abs(data['High'] - data['Close'].shift())
+    low_close = np.abs(data['Low'] - data['Close'].shift())
+    ranges = pd.concat([high_low, high_close, low_close], axis=1)
+    true_range = np.max(ranges, axis=1)
+    data['ATR'] = true_range.rolling(14).mean()
+
+    data['RSI'] = 100 - (100 / (1 + ((data['Close'].diff().where(data['Close'].diff() > 0, 0)).rolling(window=14).mean() / 
+                                      (-data['Close'].diff().where(data['Close'].diff() < 0, 0)).rolling(window=14).mean())))
+    
     data['Target'] = (data['Close'].shift(-1) > data['Close']).astype(int)
     data.dropna(inplace=True)
     
-    # Step 3: Model Training (with the new feature!)
-    # Add 'sentiment_score' to the list of features
-    features = ['Close', 'Volume', 'SMA_50', 'SMA_200', 'RSI', 'sentiment_score']
+    # Define the new, expanded feature set
+    features = [
+        'Close', 'Volume', 'sentiment_score', 'RSI', 
+        'SMA_20', 'Upper_Band', 'Lower_Band', 'ATR'
+    ]
     X = data[features]
     y = data['Target']
     
+    # Time-series split remains the same
     tscv = TimeSeriesSplit(n_splits=5)
     for train_index, test_index in tscv.split(X):
         X_train, X_test = X.iloc[train_index], X.iloc[test_index]
         y_train, y_test = y.iloc[train_index], y.iloc[test_index]
         
-    model = RandomForestClassifier(n_estimators=100, random_state=42)
+    # --- UPGRADE 3: Use the more powerful XGBoost model ---
+    model = xgb.XGBClassifier(
+        objective='binary:logistic',
+        n_estimators=100,
+        learning_rate=0.1,
+        max_depth=5,
+        random_state=42,
+        use_label_encoder=False,
+        eval_metric='logloss'
+    )
     model.fit(X_train, y_train)
     accuracy = accuracy_score(y_test, model.predict(X_test))
     
