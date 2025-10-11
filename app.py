@@ -12,6 +12,9 @@ from sklearn.model_selection import TimeSeriesSplit
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score
 import finnhub
+import xgboost as xgb
+from sklearn.model_selection import GridSearchCV
+import plotly.graph_objects as go
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -46,19 +49,17 @@ def get_news_sentiment(company_name):
         analysis += f"- Headline: {headline}\n  - Sentiment: {results[i]['label']} (Score: {results[i]['score']:.2f})\n"
     return analysis
 
-# Make sure to add this import at the top of your file
-
-# Make sure to add this import at the top of your file
-import xgboost as xgb
-
+# This is the new, final version of the training function
 @st.cache_data
 def train_prediction_model(ticker):
-    """Creates advanced features and trains an XGBoost model on a 7-year period."""
-    # --- UPGRADE 1: Focus on a more relevant 7-year period ---
+    """
+    Performs feature engineering and uses GridSearchCV to find the optimal XGBoost model.
+    Returns the model, accuracy, data, features, and test set predictions.
+    """
+    # --- Data Collection and Feature Engineering (remains the same) ---
     data = get_stock_data(ticker, period="7y")
-
-    # --- Get and Process News Sentiment (as before) ---
     news_df = get_historical_news(ticker, data)
+    
     if not news_df.empty:
         sentiment_analyzer = pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english")
         sentiment = sentiment_analyzer(news_df['headline'].tolist())
@@ -68,56 +69,44 @@ def train_prediction_model(ticker):
         data['sentiment_score'].fillna(0, inplace=True)
     else:
         data['sentiment_score'] = 0
-
-    # --- UPGRADE 2: Add more advanced features ---
-    # Bollinger Bands
+    
     data['SMA_20'] = data['Close'].rolling(window=20).mean()
     data['Std_Dev_20'] = data['Close'].rolling(window=20).std()
     data['Upper_Band'] = data['SMA_20'] + (data['Std_Dev_20'] * 2)
     data['Lower_Band'] = data['SMA_20'] - (data['Std_Dev_20'] * 2)
-    
-    # Average True Range (ATR)
     high_low = data['High'] - data['Low']
     high_close = np.abs(data['High'] - data['Close'].shift())
     low_close = np.abs(data['Low'] - data['Close'].shift())
     ranges = pd.concat([high_low, high_close, low_close], axis=1)
     true_range = np.max(ranges, axis=1)
     data['ATR'] = true_range.rolling(14).mean()
-
     data['RSI'] = 100 - (100 / (1 + ((data['Close'].diff().where(data['Close'].diff() > 0, 0)).rolling(window=14).mean() / 
                                       (-data['Close'].diff().where(data['Close'].diff() < 0, 0)).rolling(window=14).mean())))
-    
     data['Target'] = (data['Close'].shift(-1) > data['Close']).astype(int)
     data.dropna(inplace=True)
     
-    # Define the new, expanded feature set
-    features = [
-        'Close', 'Volume', 'sentiment_score', 'RSI', 
-        'SMA_20', 'Upper_Band', 'Lower_Band', 'ATR'
-    ]
+    features = ['Close', 'Volume', 'sentiment_score', 'RSI', 'SMA_20', 'Upper_Band', 'Lower_Band', 'ATR']
     X = data[features]
     y = data['Target']
     
-    # Time-series split remains the same
     tscv = TimeSeriesSplit(n_splits=5)
     for train_index, test_index in tscv.split(X):
         X_train, X_test = X.iloc[train_index], X.iloc[test_index]
         y_train, y_test = y.iloc[train_index], y.iloc[test_index]
-        
-    # --- UPGRADE 3: Use the more powerful XGBoost model ---
-    model = xgb.XGBClassifier(
-        objective='binary:logistic',
-        n_estimators=100,
-        learning_rate=0.1,
-        max_depth=5,
-        random_state=42,
-        use_label_encoder=False,
-        eval_metric='logloss'
-    )
-    model.fit(X_train, y_train)
-    accuracy = accuracy_score(y_test, model.predict(X_test))
+
+    # --- Hyperparameter Tuning with GridSearchCV ---
+    param_grid = {'n_estimators': [100, 200], 'max_depth': [3, 5, 7], 'learning_rate': [0.01, 0.1]}
+    xgb_model = xgb.XGBClassifier(objective='binary:logistic', random_state=42, use_label_encoder=False, eval_metric='logloss')
+    grid_search = GridSearchCV(estimator=xgb_model, param_grid=param_grid, scoring='accuracy', cv=tscv, n_jobs=-1)
+    grid_search.fit(X_train, y_train)
+    best_model = grid_search.best_estimator_
     
-    return model, accuracy, data, features
+    # --- Generate Predictions and Accuracy ---
+    y_pred = best_model.predict(X_test)
+    accuracy = accuracy_score(y_test, y_pred)
+    
+    # --- NEW: Return test data and predictions for plotting ---
+    return best_model, accuracy, data, features, X_test, y_pred
 
 @st.cache_data
 def get_historical_news(ticker, data):
@@ -171,7 +160,8 @@ def generate_ai_summary(ticker, company_name, model_accuracy, news_sentiment):
     )
     return chat_completion.choices[0].message.content
 
-# --- Streamlit App UI ---
+
+# --- Streamlit App UI (New Version) ---
 st.title("AI Financial Analyst Dashboard")
 
 # Sidebar for User Input
@@ -184,25 +174,76 @@ company_name = st.sidebar.selectbox("Select a Company", list(ticker_map.keys()))
 ticker = ticker_map[company_name]
 
 if ticker:
-    # Train the predictive model and get results
-    with st.spinner(f"Training predictive model for {company_name}..."):
-        model, accuracy, data, features = train_prediction_model(ticker)
+    # Train model and get all the necessary results
+    with st.spinner(f"Training advanced predictive model for {company_name}..."):
+        model, accuracy, data, features, X_test, y_pred = train_prediction_model(ticker)
     
     st.header(f"Predictive Analysis for {company_name}")
     st.metric(label="Prediction Model Accuracy", value=f"{accuracy:.2%}")
-    st.info("This model attempts to predict if the stock price will go up or down the next day based on historical data.")
+    st.info("This model attempts to predict if the stock price will go up or down the next day. The interactive chart below shows its predictions on the most recent data.")
+
+    # --- NEW: Interactive Plotly Chart with Predictions ---
+    st.subheader("Model Predictions vs. Actual Prices")
     
-    # Display visualizations
-    st.subheader("Historical Closing Price")
-    st.line_chart(data['Close'])
+    predictions_df = X_test.copy()
+    predictions_df['Actual_Close'] = data['Close'].loc[X_test.index]
+    predictions_df['Prediction'] = y_pred
     
+    plot_df = predictions_df.tail(100)
+
+    # Create a Plotly figure
+    fig = go.Figure()
+
+    # Add the actual closing price line
+    fig.add_trace(go.Scatter(
+        x=plot_df.index, 
+        y=plot_df['Actual_Close'],
+        mode='lines',
+        name='Actual Price',
+        line=dict(color='blue')
+    ))
+
+    # Add markers for UP predictions
+    up_predictions = plot_df[plot_df['Prediction'] == 1]
+    fig.add_trace(go.Scatter(
+        x=up_predictions.index,
+        y=up_predictions['Actual_Close'],
+        mode='markers',
+        name='Predicted Up',
+        marker=dict(color='green', symbol='triangle-up', size=10)
+    ))
+
+    # Add markers for DOWN predictions
+    down_predictions = plot_df[plot_df['Prediction'] == 0]
+    fig.add_trace(go.Scatter(
+        x=down_predictions.index,
+        y=down_predictions['Actual_Close'],
+        mode='markers',
+        name='Predicted Down',
+        marker=dict(color='red', symbol='triangle-down', size=10)
+    ))
+
+    # Update layout for a clean look
+    fig.update_layout(
+        title=f'{company_name} - Actual Price vs. Model Predictions (Last 100 Days)',
+        xaxis_title='Date',
+        yaxis_title='Price (USD)',
+        legend_title='Legend',
+        height=600
+    )
+    
+    # Display the interactive chart in Streamlit
+    st.plotly_chart(fig, use_container_width=True)
+    # --- END OF NEW SECTION ---
+
+    # Feature Importance Chart (as before)
     st.subheader("Feature Importance")
     feature_importances = pd.Series(model.feature_importances_, index=features).sort_values(ascending=False)
-    fig, ax = plt.subplots()
-    sns.barplot(x=feature_importances, y=feature_importances.index, ax=ax)
-    st.pyplot(fig)
+    fig_importance, ax_importance = plt.subplots()
+    sns.barplot(x=feature_importances, y=feature_importances.index, ax=ax_importance)
+    st.pyplot(fig_importance)
 
-    # AI Agent Summary Section
+    # AI Agent Summary Section (as before)
     st.header("AI-Generated Summary Report")
     if st.button("Generate AI Summary"):
         with st.spinner("Getting news sentiment and generating report..."):

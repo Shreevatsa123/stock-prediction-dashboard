@@ -63,3 +63,4 @@ torch
 groq
 finnhub-python
 xgboost
+ploty
