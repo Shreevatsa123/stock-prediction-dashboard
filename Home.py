@@ -68,7 +68,9 @@ def get_news_sentiment(company_name):
 
 @st.cache_data
 def engineer_features_and_split(data, news_df):
+    """Performs all feature engineering and data splitting."""
     if not news_df.empty:
+        # (Your sentiment analysis logic is here)
         sentiment_analyzer = pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english")
         sentiment = sentiment_analyzer(news_df['headline'].tolist())
         news_df['sentiment_score'] = [s['score'] if s['label'] == 'POSITIVE' else -s['score'] for s in sentiment]
@@ -77,6 +79,8 @@ def engineer_features_and_split(data, news_df):
         data['sentiment_score'] = data['sentiment_score'].fillna(0)
     else:
         data['sentiment_score'] = 0
+
+    # (Your feature engineering logic is here)
     data['SMA_20'] = data['Close'].rolling(window=20).mean()
     data['Std_Dev_20'] = data['Close'].rolling(window=20).std()
     data['Upper_Band'] = data['SMA_20'] + (data['Std_Dev_20'] * 2)
@@ -86,12 +90,22 @@ def engineer_features_and_split(data, news_df):
     data['ATR'] = np.max(ranges, axis=1).rolling(14).mean()
     data['RSI'] = 100 - (100 / (1 + ((data['Close'].diff().where(data['Close'].diff() > 0, 0)).rolling(14).mean() / (-data['Close'].diff().where(data['Close'].diff() < 0, 0)).rolling(14).mean())))
     data['Target'] = (data['Close'].shift(-1) > data['Close']).astype(int)
+    
     data.dropna(inplace=True)
+
+    # --- FIX: Add a check to ensure data exists after processing ---
+    if data.empty:
+        st.error(f"Insufficient historical data available for the selected stock to train a model. Please select another one.")
+        st.stop() # This halts the script gracefully
+    # --- END OF FIX ---
+
     features = ['Close', 'Volume', 'sentiment_score', 'RSI', 'SMA_20', 'Upper_Band', 'Lower_Band', 'ATR']
     X, y = data[features], data['Target']
+    
     tscv = TimeSeriesSplit(n_splits=5)
     for train_index, test_index in tscv.split(X):
         X_train, X_test, y_train, y_test = X.iloc[train_index], X.iloc[test_index], y.iloc[train_index], y.iloc[test_index]
+        
     return data, X, features, X_train, X_test, y_train, y_test, tscv
 
 @st.cache_data
