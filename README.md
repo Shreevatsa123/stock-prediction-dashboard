@@ -144,6 +144,3 @@ streamlit run Home.py
 ```
 
 The application should automatically open in your web browser.
-
-```
-```
