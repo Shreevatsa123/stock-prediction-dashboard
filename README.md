@@ -10,6 +10,7 @@ This dashboard allows users to select a major stock and receive a detailed analy
 - [Features](#features)
 - [Tech Stack & Architecture](#tech-stack--architecture)
 - [The Workflow: A Deep Dive](#the-workflow-a-deep-dive)
+- [Dashboard Screenshots](#dashboard-screenshots)
 - [How to Set Up and Run Locally](#how-to-set-up-and-run-locally)
 
 ## Introduction
@@ -88,6 +89,10 @@ After the model is trained, the user can click a button to get a final report.
 
 - The application sends the model's accuracy and a summary of recent news sentiment to a powerful **Large Language Model (Llama 3 via the Groq API)**.
 - This LLM then writes a concise, easy-to-read summary, just like a human analyst would.
+
+## Dashboard Screenshots
+
+
 
 ## How to Set Up and Run Locally
 
