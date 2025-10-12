@@ -124,21 +124,47 @@ def generate_ai_summary(ticker, company_name, model_accuracy, news_sentiment):
     return chat_completion.choices[0].message.content
 
 # --- Main Analysis Function ---
+# Home.py
+
+# --- Main Analysis Function ---
 def run_analysis(ticker):
     """Orchestrates the analysis and logs details to session_state."""
     logs = []
+    
+    # --- FIX: Add a data validation check right after fetching ---
     data = get_stock_data(ticker)
+    if data.empty:
+        st.error(f"Could not retrieve historical stock data for {ticker}. The ticker may be invalid or delisted, or there may be an issue with the data provider. Please select another stock.")
+        st.stop() # This halts the script gracefully
+    # --- END OF FIX ---
+
     news_df = get_historical_news(ticker, data)
     logs.append(f"## Step 1 & 2: Data Collection\n- Fetched **{len(data)}** hourly data points and **{len(news_df)}** news headlines.")
+    
     data, X, features, X_train, X_test, y_train, y_test, tscv = engineer_features_and_split(data, news_df)
+    
+    # Check if data is empty after feature engineering
+    if X_train.empty or X_test.empty:
+        st.error(f"Insufficient data for {ticker} after processing to train a model. Please select another stock.")
+        st.stop()
+
     logs.append(f"\n## Step 3 & 4: Feature Engineering & Splitting\n- **Splitting Method:** `TimeSeriesSplit` to train on the past and test on the future.\n- Final training data shape: `{X_train.shape}`. Testing data shape: `{X_test.shape}`.")
+    
     best_model, best_params = find_best_model(X_train, y_train, tscv)
     logs.append(f"\n## Step 5: Model Selection & Tuning\n- **Algorithm:** `XGBoost` for its high performance.\n- Best parameters found by `GridSearchCV`: `{best_params}`")
+    
     y_pred = best_model.predict(X_test)
     accuracy = accuracy_score(y_test, y_pred)
     logs.append(f"\n## Step 6: Final Evaluation\n- Final Model Accuracy on test data: **{accuracy:.2%}**")
-    st.session_state.run_details = {'logs': logs, 'model': best_model, 'accuracy': accuracy, 'data': data, 'features': features, 'X_test': X_test, 'y_pred': y_pred, 'correlation_matrix': X.corr(), 'best_params': best_params, 'initial_data_head': get_stock_data(ticker).head(), 'featured_data_head': data.head()}
-
+    
+    st.session_state.run_details = {
+        'logs': logs, 'model': best_model, 'accuracy': accuracy, 'data': data, 
+        'features': features, 'X_test': X_test, 'y_pred': y_pred, 
+        'correlation_matrix': X.corr(), 'best_params': best_params, 
+        'initial_data_head': get_stock_data(ticker).head(), 
+        'featured_data_head': data.head()
+    }
+    
 # --- Streamlit App UI ---
 st.title("AI Financial Analyst Dashboard")
 st.sidebar.header("User Input")
