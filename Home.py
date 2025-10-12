@@ -22,13 +22,28 @@ st.set_page_config(page_title="AI Financial Analyst Dashboard", page_icon="🤖"
 def get_stock_data(ticker):
     return yf.Ticker(ticker).history(period="730d", interval="1h")
 
+# Home.py
+
 @st.cache_data
 def get_historical_news(ticker, data):
+    """Fetches historical news from Finnhub for the date range of the stock data."""
+    
+    # --- FIX: Add a check to ensure the data is not empty ---
+    if data.empty:
+        st.warning(f"Could not retrieve historical stock data for {ticker}. Skipping news analysis.")
+        return pd.DataFrame() # Return an empty DataFrame to prevent a crash
+    # --- END OF FIX ---
+
+    st.write("Fetching historical news... This may take a minute for the first run.")
     finnhub_client = finnhub.Client(api_key=st.secrets["FINNHUB_API_KEY"])
     all_news = []
-    start_date, end_date = data.index.min().strftime('%Y-%m-%d'), data.index.max().strftime('%Y-%m-%d')
+    
+    start_date = data.index.min().strftime('%Y-%m-%d')
+    end_date = data.index.max().strftime('%Y-%m-%d')
+    
     news = finnhub_client.company_news(ticker, _from=start_date, to=end_date)
     all_news.extend(news)
+    
     news_df = pd.DataFrame(all_news)
     if not news_df.empty:
         news_df['datetime'] = pd.to_datetime(news_df['datetime'], unit='s')
