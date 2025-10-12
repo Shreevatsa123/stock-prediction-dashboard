@@ -1,16 +1,15 @@
-streamlit==1.35.0
-pandas==2.2.2
+streamlit
+pandas
+numpy
 yfinance
 finnhub-python
 requests
 beautifulsoup4
 xgboost
+scikit-learn
 plotly
 seaborn
 matplotlib
 groq
-transformers==4.40.1
+transformers
 torch
-# Let the installer resolve these core scientific libraries
-numpy
-scikit-learn
