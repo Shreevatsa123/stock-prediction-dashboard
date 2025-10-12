@@ -59,7 +59,7 @@ def engineer_features_and_split(data, news_df):
         news_df['sentiment_score'] = [s['score'] if s['label'] == 'POSITIVE' else -s['score'] for s in sentiment]
         daily_sentiment = news_df.resample('D')['sentiment_score'].mean().reindex(data.index, method='ffill')
         data = data.join(daily_sentiment)
-        data['sentiment_score'].fillna(0, inplace=True)
+        data['sentiment_score'] = data['sentiment_score'].fillna(0)
     else:
         data['sentiment_score'] = 0
     data['SMA_20'] = data['Close'].rolling(window=20).mean()
