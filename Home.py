@@ -164,7 +164,7 @@ def run_analysis(ticker):
         'initial_data_head': get_stock_data(ticker).head(), 
         'featured_data_head': data.head()
     }
-    
+
 # --- Streamlit App UI ---
 st.title("AI Financial Analyst Dashboard")
 st.sidebar.header("User Input")
@@ -181,6 +181,19 @@ details = st.session_state.run_details
 if details:
     st.header(f"Predictive Analysis for {company_name}")
     st.metric(label="Prediction Model Accuracy", value=f"{details['accuracy']:.2%}")
+
+        # --- Add This New Code Block ---
+    with st.expander("💡 How to Interpret this Accuracy Score"):
+        st.markdown("""
+            Predicting hourly stock movements is one of the most challenging problems in data science due to the market's high degree of randomness.
+            
+            - **50% Accuracy:** Is equivalent to a random coin flip.
+            - **55% - 60% Accuracy:** Is considered a significant and valuable edge. Top-tier quantitative hedge funds often build complex strategies around models with this level of accuracy.
+            - **Above 65% Accuracy:** Consistently achieving this level is extremely rare and would represent a world-class breakthrough.
+            
+            Our model's performance should be viewed in this context. An accuracy consistently above 50% indicates that it has successfully identified a genuine, predictive signal from the noise.
+        """)
+    # --- End of New Code Block ---
 
     # --- UPDATED: Plotly chart with full test data ---
     predictions_df = details['X_test'].copy()
