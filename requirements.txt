@@ -86,9 +86,3 @@ watchdog==6.0.0
 websockets==15.0.1
 xgboost==3.0.5
 yfinance==0.2.66
-transformers
-torch
-groq
-finnhub-python
-xgboost
-plotly
