@@ -20,9 +20,33 @@ st.set_page_config(page_title="AI Financial Analyst Dashboard", page_icon="🤖"
 # (All your caching functions remain the same)
 @st.cache_data
 def get_stock_data(ticker):
-    return yf.Ticker(ticker).history(period="730d", interval="1h")
-
-# Home.py
+    """Downloads historical stock data from Finnhub."""
+    st.write(f"Fetching 2 years of hourly data for {ticker} from Finnhub...")
+    finnhub_client = finnhub.Client(api_key=st.secrets["FINNHUB_API_KEY"])
+    
+    # Finnhub requires start and end times in Unix timestamp format
+    end_time = int(pd.Timestamp.now().timestamp())
+    start_time = int((pd.Timestamp.now() - pd.DateOffset(years=2)).timestamp())
+    
+    # Fetch data
+    res = finnhub_client.stock_candles(ticker, '60', start_time, end_time)
+    
+    # Convert the JSON response to a pandas DataFrame
+    if res['s'] == 'ok' and len(res['t']) > 0:
+        data = pd.DataFrame({
+            'Open': res['o'],
+            'High': res['h'],
+            'Low': res['l'],
+            'Close': res['c'],
+            'Volume': res['v']
+        }, index=pd.to_datetime(res['t'], unit='s'))
+        
+        # Convert index to America/New_York timezone to match news data
+        data.index = data.index.tz_localize('UTC').tz_convert('America/New_York')
+        return data
+    else:
+        # Return an empty DataFrame if no data is found
+        return pd.DataFrame()
 
 @st.cache_data
 def get_historical_news(ticker, data):
