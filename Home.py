@@ -17,37 +17,75 @@ from sklearn.metrics import accuracy_score
 # --- Page Configuration ---
 st.set_page_config(page_title="AI Financial Analyst Dashboard", page_icon="🤖", layout="wide")
 
-# (All your caching functions remain the same)
+# Home.py
+
+# --- Add these new imports at the top of your file ---
+import time
+import io
+
 @st.cache_data
 def get_stock_data(ticker):
-    """Downloads historical stock data from Finnhub."""
-    st.write(f"Fetching 2 years of hourly data for {ticker} from Finnhub...")
-    finnhub_client = finnhub.Client(api_key=st.secrets["FINNHUB_API_KEY"])
+    """
+    Downloads 2 years of historical hourly stock data from Alpha Vantage.
+    This is a complex function to handle the API's monthly data slices.
+    """
+    st.write(f"Fetching 2 years of hourly data for {ticker} from Alpha Vantage...")
     
-    # Finnhub requires start and end times in Unix timestamp format
-    end_time = int(pd.Timestamp.now().timestamp())
-    start_time = int((pd.Timestamp.now() - pd.DateOffset(years=2)).timestamp())
-    
-    # Fetch data
-    res = finnhub_client.stock_candles(ticker, '60', start_time, end_time)
-    
-    # Convert the JSON response to a pandas DataFrame
-    if res['s'] == 'ok' and len(res['t']) > 0:
-        data = pd.DataFrame({
-            'Open': res['o'],
-            'High': res['h'],
-            'Low': res['l'],
-            'Close': res['c'],
-            'Volume': res['v']
-        }, index=pd.to_datetime(res['t'], unit='s'))
-        
-        # Convert index to America/New_York timezone to match news data
-        data.index = data.index.tz_localize('UTC').tz_convert('America/New_York')
-        return data
-    else:
-        # Return an empty DataFrame if no data is found
+    API_KEY = st.secrets["ALPHA_VANTAGE_API_KEY"]
+    all_data = []
+
+    # Alpha Vantage provides 2 years of data in 24 monthly slices
+    for year in [1, 2]:
+        for month in range(1, 13):
+            slice_period = f'year{year}month{month}'
+            url = f'https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY_EXTENDED&symbol={ticker}&interval=60min&slice={slice_period}&apikey={API_KEY}'
+            
+            try:
+                response = requests.get(url)
+                response.raise_for_status() # Raise an exception for bad status codes
+                
+                # The data is returned as CSV, so we read it into a DataFrame
+                df = pd.read_csv(io.StringIO(response.text))
+                all_data.append(df)
+                
+                # --- Crucial: Add a delay to respect the API's rate limit ---
+                time.sleep(13) # Sleep for 13 seconds between each of the 24 calls
+            
+            except requests.exceptions.RequestException as e:
+                st.warning(f"Could not fetch data for slice {slice_period}. Error: {e}. Skipping.")
+                continue
+            except Exception as e:
+                # Handle cases where the CSV might be empty or malformed for a given month
+                st.info(f"No data available for {ticker} in period {slice_period}. This may be normal.")
+                time.sleep(13)
+                continue
+
+    if not all_data:
+        st.error(f"Failed to fetch any data for {ticker} from Alpha Vantage. The ticker might be invalid or the API limit may have been reached.")
         return pd.DataFrame()
 
+    # Combine all the monthly dataframes into one
+    full_df = pd.concat(all_data)
+    
+    # --- Data Cleaning and Formatting ---
+    # Convert 'time' column to datetime objects and set as index
+    full_df.set_index(pd.to_datetime(full_df['time']), inplace=True)
+    
+    # Rename columns to match our existing code
+    full_df.rename(columns={
+        'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'
+    }, inplace=True)
+    
+    # Select only the columns we need
+    full_df = full_df[['Open', 'High', 'Low', 'Close', 'Volume']]
+    
+    # Sort the data chronologically
+    full_df.sort_index(inplace=True)
+    
+    # Convert index to America/New_York timezone to match news data
+    full_df.index = full_df.index.tz_localize('UTC').tz_convert('America/New_York')
+
+    return full_df
 @st.cache_data
 def get_historical_news(ticker, data):
     """Fetches historical news from Finnhub for the date range of the stock data."""
