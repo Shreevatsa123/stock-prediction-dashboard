@@ -23,69 +23,46 @@ st.set_page_config(page_title="AI Financial Analyst Dashboard", page_icon="🤖"
 import time
 import io
 
+# Home.py
+
+# --- Add this new import at the top of your file ---
+from requests import Session
+from requests_cache import CacheMixin, SQLiteCache
+from requests_ratelimiter import LimiterMixin, MemoryQueueBucket
+
+# --- NEW, more robust get_stock_data function ---
 @st.cache_data
 def get_stock_data(ticker):
     """
-    Downloads 2 years of historical hourly stock data from Alpha Vantage.
-    This is a complex function to handle the API's monthly data slices.
+    Downloads 2 years of historical hourly stock data using a cached and rate-limited yfinance session.
     """
-    st.write(f"Fetching 2 years of hourly data for {ticker} from Alpha Vantage...")
+    st.write(f"Fetching 2 years of hourly data for {ticker} from yfinance...")
+
+    # --- Use a more robust, session-based approach ---
+    class CachedLimiterSession(CacheMixin, LimiterMixin, Session):
+        """Rate-limit and cache sessions to avoid being blocked"""
     
-    API_KEY = st.secrets["ALPHA_VANTAGE_API_KEY"]
-    all_data = []
+    session = CachedLimiterSession(
+        per_second=2,  # Max 2 requests per second
+        bucket_class=MemoryQueueBucket
+    )
+    # --- End of new session setup ---
 
-    # Alpha Vantage provides 2 years of data in 24 monthly slices
-    for year in [1, 2]:
-        for month in range(1, 13):
-            slice_period = f'year{year}month{month}'
-            url = f'https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY_EXTENDED&symbol={ticker}&interval=60min&slice={slice_period}&apikey={API_KEY}'
-            
-            try:
-                response = requests.get(url)
-                response.raise_for_status() # Raise an exception for bad status codes
-                
-                # The data is returned as CSV, so we read it into a DataFrame
-                df = pd.read_csv(io.StringIO(response.text))
-                all_data.append(df)
-                
-                # --- Crucial: Add a delay to respect the API's rate limit ---
-                time.sleep(13) # Sleep for 13 seconds between each of the 24 calls
-            
-            except requests.exceptions.RequestException as e:
-                st.warning(f"Could not fetch data for slice {slice_period}. Error: {e}. Skipping.")
-                continue
-            except Exception as e:
-                # Handle cases where the CSV might be empty or malformed for a given month
-                st.info(f"No data available for {ticker} in period {slice_period}. This may be normal.")
-                time.sleep(13)
-                continue
-
-    if not all_data:
-        st.error(f"Failed to fetch any data for {ticker} from Alpha Vantage. The ticker might be invalid or the API limit may have been reached.")
+    stock = yf.Ticker(ticker, session=session)
+    
+    # Fetch 2 years of hourly data (max allowed by yfinance is 730 days)
+    data = stock.history(period="730d", interval="1h")
+    
+    if data.empty:
+        # This will trigger the error handling you already have in run_analysis()
         return pd.DataFrame()
 
-    # Combine all the monthly dataframes into one
-    full_df = pd.concat(all_data)
-    
-    # --- Data Cleaning and Formatting ---
-    # Convert 'time' column to datetime objects and set as index
-    full_df.set_index(pd.to_datetime(full_df['time']), inplace=True)
-    
-    # Rename columns to match our existing code
-    full_df.rename(columns={
-        'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'
-    }, inplace=True)
-    
-    # Select only the columns we need
-    full_df = full_df[['Open', 'High', 'Low', 'Close', 'Volume']]
-    
-    # Sort the data chronologically
-    full_df.sort_index(inplace=True)
-    
     # Convert index to America/New_York timezone to match news data
-    full_df.index = full_df.index.tz_localize('UTC').tz_convert('America/New_York')
+    data.index = data.index.tz_convert('America/New_York')
 
-    return full_df
+    return data
+
+
 @st.cache_data
 def get_historical_news(ticker, data):
     """Fetches historical news from Finnhub for the date range of the stock data."""
