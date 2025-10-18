@@ -45,7 +45,6 @@ This project uses a modern, end-to-end data science stack, all with free-tier or
 - **Data Sourcing:**
     - **yfinance API:** For historical hourly stock market data (price, volume).
     - **Finnhub API:** For historical company news headlines.
-    - **BeautifulSoup:** For scraping recent news headlines for the AI summary.
 - **Machine Learning & Data Science:**
     - **Pandas:** For data manipulation and analysis.
     - **Scikit-learn:** For data splitting (`TimeSeriesSplit`) and model tuning (`GridSearchCV`).
