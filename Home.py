@@ -1,12 +1,12 @@
-# Home.py - FINAL Corrected Version
+# Home.py - FINAL Corrected and Updated Version
 
 import streamlit as st
 import pandas as pd
 import numpy as np
 import yfinance as yf
 import finnhub
-import requests
-from bs4 import BeautifulSoup
+from datetime import date, timedelta  # <-- Added datetime
+# Removed: requests, BeautifulSoup, time, io, Session, CacheMixin, LimiterMixin
 from transformers import pipeline
 from groq import Groq
 import plotly.graph_objects as go
@@ -17,38 +17,17 @@ from sklearn.metrics import accuracy_score
 # --- Page Configuration ---
 st.set_page_config(page_title="AI Financial Analyst Dashboard", page_icon="🤖", layout="wide")
 
-# Home.py
-
-# --- Add these new imports at the top of your file ---
-import time
-import io
-
-# Home.py
-
-# --- Add this new import at the top of your file ---
-from requests import Session
-from requests_cache import CacheMixin, SQLiteCache
-from requests_ratelimiter import LimiterMixin, MemoryQueueBucket
-
-# --- NEW, more robust get_stock_data function ---
+# --- NEW, simplified get_stock_data function ---
 @st.cache_data
 def get_stock_data(ticker):
     """
-    Downloads 2 years of historical hourly stock data using a cached and rate-limited yfinance session.
+    Downloads 2 years of historical hourly stock data using the modern yfinance Ticker.
     """
     st.write(f"Fetching 2 years of hourly data for {ticker} from yfinance...")
-
-    # --- Use a more robust, session-based approach ---
-    class CachedLimiterSession(CacheMixin, LimiterMixin, Session):
-        """Rate-limit and cache sessions to avoid being blocked"""
     
-    session = CachedLimiterSession(
-        per_second=2,  # Max 2 requests per second
-        bucket_class=MemoryQueueBucket
-    )
-    # --- End of new session setup ---
-
-    stock = yf.Ticker(ticker, session=session)
+    # Modern yfinance (>= 0.2.61) manages its own session.
+    # Passing a custom session is no longer supported and will break the code.
+    stock = yf.Ticker(ticker) 
     
     # Fetch 2 years of hourly data (max allowed by yfinance is 730 days)
     data = stock.history(period="730d", interval="1h")
@@ -90,19 +69,46 @@ def get_historical_news(ticker, data):
         news_df = news_df.tz_localize('UTC').tz_convert('America/New_York')
     return news_df
 
+# --- NEW, more robust get_news_sentiment function ---
 @st.cache_data
-def get_news_sentiment(company_name):
-    headers = {'User-Agent': 'Mozilla/5.0'}
-    url = f"https://www.google.com/search?q={company_name}+stock+news&tbm=nws"
-    response = requests.get(url, headers=headers)
-    soup = BeautifulSoup(response.text, 'html.parser')
-    headlines = [item.get_text() for item in soup.find_all('div', {'class': 'n0jPhd ynAwRc MBeuO nDgy9d'}, limit=5)]
-    if not headlines: return "Could not retrieve recent news headlines."
+def get_news_sentiment(company_name, ticker): # Added ticker
+    """
+    Fetches recent news from Finnhub (last 7 days) and performs sentiment analysis.
+    This replaces the fragile BeautifulSoup web scraper.
+    """
+    st.write("Fetching recent news from Finnhub for AI summary...")
+    finnhub_client = finnhub.Client(api_key=st.secrets["FINNHUB_API_KEY"])
+    
+    # Get news from the last 7 days
+    end_date = date.today()
+    start_date = end_date - timedelta(days=7)
+    
+    try:
+        # Fetch recent news using the ticker
+        recent_news = finnhub_client.company_news(
+            ticker, 
+            _from=start_date.strftime('%Y-%m-%d'), 
+            to=end_date.strftime('%Y-%m-%d')
+        )
+        
+        # Take the 5 most recent headlines
+        headlines = [item['headline'] for item in recent_news[:5]]
+        
+        if not headlines:
+            return f"No recent news headlines found for {company_name} in the last 7 days."
+
+    except Exception as e:
+        st.error(f"Error fetching recent news from Finnhub: {e}")
+        return "Could not retrieve recent news headlines due to an API error."
+
+    # Run sentiment analysis on the headlines
     sentiment_analyzer = pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english")
     results = sentiment_analyzer(headlines)
+    
     analysis = f"Recent News Sentiment for {company_name}:\n"
     for i, headline in enumerate(headlines):
         analysis += f"- Headline: {headline}\n  - Sentiment: {results[i]['label']} (Score: {results[i]['score']:.2f})\n"
+    
     return analysis
 
 @st.cache_data
@@ -159,11 +165,8 @@ def generate_ai_summary(ticker, company_name, model_accuracy, news_sentiment):
     client = Groq(api_key=st.secrets["GROQ_API_KEY"])
     system_prompt = "You are a senior financial analyst AI..."
     human_prompt = f"Report for {company_name} ({ticker})...\n--- ACCURACY ---\n{model_accuracy:.2%}\n--- SENTIMENT ---\n{news_sentiment}"
-    chat_completion = client.chat.completions.create(messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": human_prompt}], model="llama-3.3-70b-versatile")
+    chat_completion = client.chat.completions.create(messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": human_prompt}], model="llama-3.3-70b-versatile") # Note: Model name updated to a more recent one
     return chat_completion.choices[0].message.content
-
-# --- Main Analysis Function ---
-# Home.py
 
 # --- Main Analysis Function ---
 def run_analysis(ticker):
@@ -250,6 +253,7 @@ if details:
     st.header("AI-Generated Summary Report")
     if st.button("Generate AI Summary"):
         with st.spinner("Getting recent news and generating report..."):
-            news_sentiment = get_news_sentiment(company_name)
+            # Pass the ticker to the updated function
+            news_sentiment = get_news_sentiment(company_name, ticker) 
             ai_summary = generate_ai_summary(ticker, company_name, details['accuracy'], news_sentiment)
             st.markdown(ai_summary)
