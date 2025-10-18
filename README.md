@@ -91,7 +91,11 @@ After the model is trained, the user can click a button to get a final report.
 
 ## Dashboard Screenshots
 
+### Main Dashboard
+![Main Dashboard Screenshot](./images/image.png)
 
+### Technical Details Page
+![Technical Details Screenshot](./images/image_technical_details.png)
 
 ## How to Set Up and Run Locally
 
