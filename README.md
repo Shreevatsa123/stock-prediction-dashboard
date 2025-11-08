@@ -6,7 +6,6 @@ This dashboard allows users to select a major stock and receive a detailed analy
 
 ## Table of Contents
 - [Introduction](#introduction)
-- [Live Demo](#live-demo)
 - [Features](#features)
 - [Tech Stack & Architecture](#tech-stack--architecture)
 - [The Workflow: A Deep Dive](#the-workflow-a-deep-dive)
@@ -24,10 +23,6 @@ This dashboard is an end-to-end data science application that:
 3.  Trains a sophisticated machine learning model to predict short-term stock price movements.
 4.  Presents these findings in an interactive, easy-to-use web interface.
 5.  Uses a generative AI to create a human-like summary of the analysis.
-
-## Live Demo
-
-> You can view a live demo of the dashboard here: **[https://stock-prediction-dashboard-shreevatsa-agnihotri.streamlit.app/](https://stock-prediction-dashboard-shreevatsa-agnihotri.streamlit.app/)**
 
 ## Features
 
@@ -152,3 +147,7 @@ streamlit run Home.py
 ```
 
 The application should automatically open in your web browser.
+
+## Live Demo
+
+> You can view a live demo of the dashboard here: **[https://stock-prediction-dashboard-shreevatsa-agnihotri.streamlit.app/](https://stock-prediction-dashboard-shreevatsa-agnihotri.streamlit.app/)**
